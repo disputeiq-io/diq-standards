@@ -1,0 +1,20 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(build)",
+    ":semanticCommitScope(deps)"
+  ],
+  "packageRules": [
+    {
+      "groupName": "disputeiq-platform-libs",
+      "matchPackagePrefixes": ["io.disputeiq", "@disputeiq/"],
+      "automerge": false
+    },
+    {
+      "groupName": "spring-ecosystem",
+      "matchPackagePrefixes": ["org.springframework"]
+    }
+  ]
+}
