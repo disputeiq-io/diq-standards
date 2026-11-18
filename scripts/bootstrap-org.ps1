@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Bootstraps and synchronizes all 20 repositories of the DisputeIQ polyrepo workspace.
+    Bootstraps and synchronizes all 20 repositories of the DisputeIQ polyrepo workspace (Gradle + Node).
 #>
 param(
     [string]$Org = "disputeiq-platform",
@@ -79,11 +79,20 @@ function Sync-CommonGovernance {
 function Sync-JavaTooling {
     param([string]$RepoPath)
     Copy-Item (Join-Path $StandardsDir "config\lefthook\lefthook-java.yml") (Join-Path $RepoPath "lefthook.yml") -Force
-    Copy-Item (Join-Path $StandardsDir "templates\maven\mvnw.cmd") (Join-Path $RepoPath "mvnw.cmd") -Force
-    Copy-Item (Join-Path $StandardsDir "templates\maven\mvnw") (Join-Path $RepoPath "mvnw") -Force
-    $mvnDir = Join-Path $RepoPath ".mvn"
-    New-Item -ItemType Directory -Force -Path $mvnDir | Out-Null
-    Copy-Item (Join-Path $StandardsDir "templates\maven\.mvn\jvm.config") (Join-Path $mvnDir "jvm.config") -Force
+    Copy-Item (Join-Path $StandardsDir "templates\gradle\gradlew.bat") (Join-Path $RepoPath "gradlew.bat") -Force
+    Copy-Item (Join-Path $StandardsDir "templates\gradle\gradlew") (Join-Path $RepoPath "gradlew") -Force
+
+    $wrapperDir = Join-Path $RepoPath "gradle\wrapper"
+    New-Item -ItemType Directory -Force -Path $wrapperDir | Out-Null
+    Copy-Item (Join-Path $StandardsDir "templates\gradle\gradle\wrapper\gradle-wrapper.properties") (Join-Path $wrapperDir "gradle-wrapper.properties") -Force
+    Copy-Item (Join-Path $StandardsDir "config\gradle\java-conventions.gradle") (Join-Path $RepoPath "gradle\java-conventions.gradle") -Force
+
+    $checkstyleDir = Join-Path $RepoPath "config\checkstyle"
+    New-Item -ItemType Directory -Force -Path $checkstyleDir | Out-Null
+    Copy-Item (Join-Path $StandardsDir "config\checkstyle\checkstyle.xml") (Join-Path $checkstyleDir "checkstyle.xml") -Force
+
+    # Remove legacy Maven build files if migrating an existing repo
+    Remove-Item -Recurse -Force (Join-Path $RepoPath "pom.xml"), (Join-Path $RepoPath "mvnw"), (Join-Path $RepoPath "mvnw.cmd"), (Join-Path $RepoPath ".mvn"), (Join-Path $RepoPath "target") -ErrorAction SilentlyContinue
 }
 
 function Sync-WebTooling {
@@ -108,52 +117,52 @@ spec:
     Write-Utf8NoBom -Path (Join-Path $RepoPath "catalog-info.yaml") -Content $catalog
 }
 
-function New-JavaServiceFromTemplate {
+function Ensure-JavaServiceGradle {
     param($svc)
     $repoPath = Join-Path $Root $svc.Name
-    if (Test-Path (Join-Path $repoPath "pom.xml")) {
-        return
-    }
+    $isNew = -not (Test-Path (Join-Path $repoPath "src"))
     New-Item -ItemType Directory -Force -Path $repoPath | Out-Null
 
-    $xmlDomain = [System.Security.SecurityElement]::Escape($svc.Domain)
-    $pom = (Get-Content (Join-Path $TemplateJavaDir "pom.xml") -Raw) `
-        -replace '<artifactId>diq-template-java</artifactId>', "<artifactId>$($svc.Name)</artifactId>" `
-        -replace '<name>DisputeIQ Java Service Template</name>', "<name>$($svc.Name)</name>" `
-        -replace 'Reference Spring Boot service template enforcing virtual threads, hexagonal boundaries, Spotless, Checkstyle, and ArchUnit\.', $xmlDomain
-    Write-Utf8NoBom -Path (Join-Path $repoPath "pom.xml") -Content $pom
-
-    $resDir = Join-Path $repoPath "src\main\resources"
-    New-Item -ItemType Directory -Force -Path $resDir | Out-Null
-    $appYml = (Get-Content (Join-Path $TemplateJavaDir "src\main\resources\application.yml") -Raw) `
-        -replace 'name: diq-template-java', "name: $($svc.Name)" `
-        -replace 'port: 8080', "port: $($svc.Port)"
-    Write-Utf8NoBom -Path (Join-Path $resDir "application.yml") -Content $appYml
-
-    $srcBase = Join-Path $TemplateJavaDir "src\main\java\io\disputeiq\template"
-    $dstBase = Join-Path $repoPath "src\main\java\io\disputeiq\$($svc.Pkg)"
-    foreach ($sub in @("", "api", "application", "domain", "infrastructure")) {
-        $srcDir = if ($sub) { Join-Path $srcBase $sub } else { $srcBase }
-        $dstDir = if ($sub) { Join-Path $dstBase $sub } else { $dstBase }
-        New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
-        Get-ChildItem $srcDir -Filter "*.java" | ForEach-Object {
-            $targetName = if ($_.Name -eq "TemplateApplication.java") { "$($svc.Class).java" } else { $_.Name }
-            $content = (Get-Content $_.FullName -Raw) `
-                -replace 'io\.disputeiq\.template', "io.disputeiq.$($svc.Pkg)" `
-                -replace 'TemplateApplication', $svc.Class
-            Write-Utf8NoBom -Path (Join-Path $dstDir $targetName) -Content $content
-        }
+    if (-not (Test-Path (Join-Path $repoPath "settings.gradle"))) {
+        Write-Utf8NoBom -Path (Join-Path $repoPath "settings.gradle") -Content "rootProject.name = '$($svc.Name)'`n"
+    }
+    if (-not (Test-Path (Join-Path $repoPath "build.gradle"))) {
+        Copy-Item (Join-Path $TemplateJavaDir "build.gradle") (Join-Path $repoPath "build.gradle") -Force
     }
 
-    $testSrcDir = Join-Path $TemplateJavaDir "src\test\java\io\disputeiq\template"
-    $testDstDir = Join-Path $repoPath "src\test\java\io\disputeiq\$($svc.Pkg)"
-    New-Item -ItemType Directory -Force -Path $testDstDir | Out-Null
-    Get-ChildItem $testSrcDir -Filter "*.java" | ForEach-Object {
-        $content = (Get-Content $_.FullName -Raw) `
-            -replace 'io\.disputeiq\.template', "io.disputeiq.$($svc.Pkg)" `
-            -replace 'TemplateApplication', $svc.Class `
-            -replace '"diq-template-java"', "`"$($svc.Name)`""
-        Write-Utf8NoBom -Path (Join-Path $testDstDir $_.Name) -Content $content
+    if ($isNew) {
+        $resDir = Join-Path $repoPath "src\main\resources"
+        New-Item -ItemType Directory -Force -Path $resDir | Out-Null
+        $appYml = (Get-Content (Join-Path $TemplateJavaDir "src\main\resources\application.yml") -Raw) `
+            -replace 'name: diq-template-java', "name: $($svc.Name)" `
+            -replace 'port: 8080', "port: $($svc.Port)"
+        Write-Utf8NoBom -Path (Join-Path $resDir "application.yml") -Content $appYml
+
+        $srcBase = Join-Path $TemplateJavaDir "src\main\java\io\disputeiq\template"
+        $dstBase = Join-Path $repoPath "src\main\java\io\disputeiq\$($svc.Pkg)"
+        foreach ($sub in @("", "api", "application", "domain", "infrastructure")) {
+            $srcDir = if ($sub) { Join-Path $srcBase $sub } else { $srcBase }
+            $dstDir = if ($sub) { Join-Path $dstBase $sub } else { $dstBase }
+            New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
+            Get-ChildItem $srcDir -Filter "*.java" | ForEach-Object {
+                $targetName = if ($_.Name -eq "TemplateApplication.java") { "$($svc.Class).java" } else { $_.Name }
+                $content = (Get-Content $_.FullName -Raw) `
+                    -replace 'io\.disputeiq\.template', "io.disputeiq.$($svc.Pkg)" `
+                    -replace 'TemplateApplication', $svc.Class
+                Write-Utf8NoBom -Path (Join-Path $dstDir $targetName) -Content $content
+            }
+        }
+
+        $testSrcDir = Join-Path $TemplateJavaDir "src\test\java\io\disputeiq\template"
+        $testDstDir = Join-Path $repoPath "src\test\java\io\disputeiq\$($svc.Pkg)"
+        New-Item -ItemType Directory -Force -Path $testDstDir | Out-Null
+        Get-ChildItem $testSrcDir -Filter "*.java" | ForEach-Object {
+            $content = (Get-Content $_.FullName -Raw) `
+                -replace 'io\.disputeiq\.template', "io.disputeiq.$($svc.Pkg)" `
+                -replace 'TemplateApplication', $svc.Class `
+                -replace '"diq-template-java"', "`"$($svc.Name)`""
+            Write-Utf8NoBom -Path (Join-Path $testDstDir $_.Name) -Content $content
+        }
     }
 
     $wfDir = Join-Path $repoPath ".github\workflows"
@@ -182,7 +191,7 @@ jobs:
 - **Backing Store**: $($svc.Db)
 - **Publishes**: $($svc.Publishes)
 - **Consumes**: $($svc.Consumes)
-- **Verification**: ``.\mvnw.cmd verify``
+- **Verification**: ``.\gradlew.bat check``
 
 Follow ``.agents/skills/disputeiq-engineering/SKILL.md``.
 "@
@@ -199,7 +208,7 @@ $($svc.Domain)
 ## Verify
 
 ``````powershell
-.\mvnw.cmd verify
+.\gradlew.bat check
 ``````
 "@
     Write-Utf8NoBom -Path (Join-Path $repoPath "README.md") -Content $readmeMd
@@ -216,52 +225,6 @@ function New-WebAppFromTemplate {
         $pkgJson = (Get-Content (Join-Path $repoPath "package.json") -Raw) -replace '"@disputeiq/template-web"', '"@disputeiq/web"'
         Write-Utf8NoBom -Path (Join-Path $repoPath "package.json") -Content $pkgJson
     }
-
-    $wfDir = Join-Path $repoPath ".github\workflows"
-    New-Item -ItemType Directory -Force -Path $wfDir | Out-Null
-    $ciYml = @"
-name: ci
-on:
-  pull_request:
-  push:
-    branches: [main]
-
-jobs:
-  pipeline:
-    uses: $Org/.github/.github/workflows/web-app.yml@main
-"@
-    Write-Utf8NoBom -Path (Join-Path $wfDir "ci.yml") -Content $ciYml
-
-    $agentsMd = @"
-# diq-web
-
-- **Role**: DisputeIQ Analyst Console (React 19, TypeScript strict, Vite)
-- **Port**: 5173
-- **API Edge**: Communicates exclusively through ``diq-gateway``
-- **Verification**: ``npm run lint && npm run format:check && npm run typecheck && npm run test && npm run build``
-
-Follow ``.agents/skills/disputeiq-engineering/SKILL.md``.
-"@
-    Write-Utf8NoBom -Path (Join-Path $repoPath "AGENTS.md") -Content $agentsMd
-
-    $readmeMd = @"
-# diq-web
-
-Analyst triage console and Case Copilot UI for **DisputeIQ**.
-
-## Verify
-
-``````powershell
-npm install
-npm run lint
-npm run format:check
-npm run typecheck
-npm run test
-npm run build
-``````
-"@
-    Write-Utf8NoBom -Path (Join-Path $repoPath "README.md") -Content $readmeMd
-    Write-CatalogInfo -RepoPath $repoPath -Name "diq-web" -Description "DisputeIQ React/TypeScript Analyst Console" -Type "website"
 }
 
 function Initialize-ScaffoldRepo {
@@ -301,13 +264,13 @@ function Initialize-GitRepo {
         $status = git -C $RepoPath status --porcelain
         if ($status) {
             git -C $RepoPath add -A
-            git -C $RepoPath commit -m $CommitMsg -m "Refs: DIQ-000" -m "Assisted-by: Antigravity" | Out-Null
+            git -C $RepoPath commit -m $CommitMsg -m "Refs: DIQ-001" -m "Assisted-by: Antigravity" | Out-Null
         }
     }
 }
 
 foreach ($svc in $javaServices) {
-    New-JavaServiceFromTemplate -svc $svc
+    Ensure-JavaServiceGradle -svc $svc
 }
 New-WebAppFromTemplate
 foreach ($spec in $scaffoldRepos) {
@@ -315,21 +278,21 @@ foreach ($spec in $scaffoldRepos) {
 }
 
 $allRepos = @(
-    @{ Name = "diq-standards";            Kind = "docs"; Msg = "chore(standards): establish org lint, git, toolchain, and agent skill standards" }
-    @{ Name = "diq-org-github";           Kind = "docs"; Msg = "ci(org): add reusable Java, web, and Helm verification workflows" }
-    @{ Name = "diq-architecture";         Kind = "docs"; Msg = "docs(architecture): add C4 diagrams and ADRs 0001-0004" }
-    @{ Name = "diq-platform-libs";        Kind = "java"; Msg = "feat(platform): add diq-parent, checkstyle bundle, and virtual-thread TenantContext" }
-    @{ Name = "diq-template-java";        Kind = "java"; Msg = "feat(template): add Java 21 Spring Boot template with ArchUnit and virtual threads" }
-    @{ Name = "diq-template-web";         Kind = "web";  Msg = "feat(template): add React 19 TypeScript template with strict ESLint and Prettier" }
-    @{ Name = "diq-infra";                Kind = "docs"; Msg = "chore(infra): add kind cluster spec, dev compose stack, and Keycloak realm" }
-    @{ Name = "diq-event-schemas";        Kind = "docs"; Msg = "chore(schemas): initialize Avro event contracts repository" }
-    @{ Name = "diq-helm-library";         Kind = "docs"; Msg = "chore(charts): initialize shared Helm library chart repository" }
-    @{ Name = "diq-gitops";               Kind = "docs"; Msg = "chore(gitops): initialize GitOps directory layout and environment placeholders" }
-    @{ Name = "diq-e2e";                  Kind = "docs"; Msg = "chore(e2e): initialize Playwright, k6, and chaos test harness repository" }
-    @{ Name = "diq-web";                  Kind = "web";  Msg = "feat(web): initialize DisputeIQ analyst console baseline from template" }
+    @{ Name = "diq-standards";            Kind = "docs"; Msg = "build(gradle): replace Maven tooling with Gradle 8.10.2 conventions and skill updates" }
+    @{ Name = "diq-org-github";           Kind = "docs"; Msg = "ci(gradle): update reusable Java workflow to Gradle 8.10.2" }
+    @{ Name = "diq-architecture";         Kind = "docs"; Msg = "docs(skills): sync Gradle-updated engineering skill" }
+    @{ Name = "diq-platform-libs";        Kind = "java"; Msg = "build(gradle): migrate diq-platform-libs to Gradle with mavenLocal publishing" }
+    @{ Name = "diq-template-java";        Kind = "java"; Msg = "build(gradle): migrate diq-template-java from Maven to Gradle 8.10.2" }
+    @{ Name = "diq-template-web";         Kind = "web";  Msg = "docs(skills): sync Gradle-updated engineering skill" }
+    @{ Name = "diq-infra";                Kind = "docs"; Msg = "chore(infra): sync updated engineering skill and Gradle toolchain check" }
+    @{ Name = "diq-event-schemas";        Kind = "docs"; Msg = "docs(skills): sync Gradle-updated engineering skill" }
+    @{ Name = "diq-helm-library";         Kind = "docs"; Msg = "docs(skills): sync Gradle-updated engineering skill" }
+    @{ Name = "diq-gitops";               Kind = "docs"; Msg = "docs(skills): sync Gradle-updated engineering skill" }
+    @{ Name = "diq-e2e";                  Kind = "docs"; Msg = "docs(skills): sync Gradle-updated engineering skill" }
+    @{ Name = "diq-web";                  Kind = "web";  Msg = "docs(skills): sync Gradle-updated engineering skill" }
 )
 foreach ($svc in $javaServices) {
-    $allRepos += @{ Name = $svc.Name; Kind = "java"; Msg = "feat(service): initialize $($svc.Name) Phase 0 baseline on Java 21 virtual threads" }
+    $allRepos += @{ Name = $svc.Name; Kind = "java"; Msg = "build(gradle): migrate $($svc.Name) from Maven to Gradle 8.10.2" }
 }
 
 foreach ($repo in $allRepos) {
@@ -344,4 +307,4 @@ foreach ($repo in $allRepos) {
     Initialize-GitRepo -RepoPath $path -CommitMsg $repo.Msg
 }
 
-Write-Host "Bootstrapped $($allRepos.Count) DisputeIQ repositories under $Root."
+Write-Host "Synchronized $($allRepos.Count) DisputeIQ repositories to Gradle tooling."

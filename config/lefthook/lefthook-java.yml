@@ -3,7 +3,7 @@ pre-commit:
   commands:
     format:
       glob: "*.java"
-      run: ./mvnw.cmd -q spotless:apply
+      run: .\gradlew.bat --no-daemon -q spotlessApply
       stage_fixed: true
     secrets:
       run: gitleaks git --pre-commit --staged --redact --no-banner
@@ -16,4 +16,4 @@ commit-msg:
 pre-push:
   commands:
     verify:
-      run: ./mvnw.cmd -q verify -DskipITs
+      run: .\gradlew.bat --no-daemon -q check
