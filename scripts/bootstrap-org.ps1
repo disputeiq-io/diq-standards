@@ -36,7 +36,7 @@ $javaServices = @(
     @{ Name = "diq-dispute-service";      Pkg = "dispute";      Class = "DisputeApplication";      Port = 8082; Db = "PostgreSQL (dispute_db, RLS)";  Domain = "Case aggregate, lifecycle state machine, SLA deadlines, and outbox";          Publishes = "dispute.case.filed.v1, dispute.case.state-changed.v1, dispute.case.decided.v1, dispute.sla.breach-warning.v1"; Consumes = "ai.recommendation.generated.v1, document.evidence.extracted.v1" }
     @{ Name = "diq-document-service";     Pkg = "document";     Class = "DocumentApplication";     Port = 8083; Db = "MinIO + PostgreSQL (doc_db)";   Domain = "Presigned S3 evidence uploads, Tika parsing, IDP extraction, PII redaction";  Publishes = "document.evidence.uploaded.v1, document.evidence.extracted.v1"; Consumes = "dispute.case.filed.v1" }
     @{ Name = "diq-knowledge-service";    Pkg = "knowledge";    Class = "KnowledgeApplication";    Port = 8084; Db = "PostgreSQL + pgvector (RLS)";   Domain = "Rulebook, policy, and precedent ingestion plus hybrid RAG retrieval API";      Publishes = "knowledge.source.ingested.v1"; Consumes = "knowledge.source.uploaded.v1, dispute.case.decided.v1" }
-    @{ Name = "diq-agent-service";        Pkg = "agent";        Class = "AgentApplication";        Port = 8085; Db = "PostgreSQL (agent_db)";         Domain = "LangGraph4j triage & drafting graphs, tools, Case Copilot, and CI evals";     Publishes = "ai.case.triaged.v1, ai.recommendation.generated.v1"; Consumes = "dispute.case.filed.v1, document.evidence.extracted.v1" }
+    @{ Name = "diq-agent-service";        Pkg = "agent";        Class = "AgentApplication";        Port = 8085; Db = "PostgreSQL (agent_db)";         Domain = "LangGraph4j triage and drafting graphs, tools, Case Copilot, and CI evals";     Publishes = "ai.case.triaged.v1, ai.recommendation.generated.v1"; Consumes = "dispute.case.filed.v1, document.evidence.extracted.v1" }
     @{ Name = "diq-notification-service"; Pkg = "notification"; Class = "NotificationApplication"; Port = 8086; Db = "Redis fan-out";                 Domain = "Live SSE push updates to diq-web, email notifications, and SLA alerts";        Publishes = "None"; Consumes = "dispute.*, ai.*, knowledge.source.ingested.v1" }
     @{ Name = "diq-network-simulator";    Pkg = "simulator";    Class = "SimulatorApplication";    Port = 8087; Db = "In-memory";                     Domain = "Simulated card-network feed intentionally emitting retries and duplicates";    Publishes = "None (calls diq-gateway)"; Consumes = "dispute.case.decided.v1" }
 )
@@ -116,10 +116,11 @@ function New-JavaServiceFromTemplate {
     }
     New-Item -ItemType Directory -Force -Path $repoPath | Out-Null
 
+    $xmlDomain = [System.Security.SecurityElement]::Escape($svc.Domain)
     $pom = (Get-Content (Join-Path $TemplateJavaDir "pom.xml") -Raw) `
         -replace '<artifactId>diq-template-java</artifactId>', "<artifactId>$($svc.Name)</artifactId>" `
         -replace '<name>DisputeIQ Java Service Template</name>', "<name>$($svc.Name)</name>" `
-        -replace 'Reference Spring Boot service template enforcing virtual threads, hexagonal boundaries, Spotless, Checkstyle, and ArchUnit\.', $svc.Domain
+        -replace 'Reference Spring Boot service template enforcing virtual threads, hexagonal boundaries, Spotless, Checkstyle, and ArchUnit\.', $xmlDomain
     Write-Utf8NoBom -Path (Join-Path $repoPath "pom.xml") -Content $pom
 
     $resDir = Join-Path $repoPath "src\main\resources"
