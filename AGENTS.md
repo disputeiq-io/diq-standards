@@ -1,7 +1,7 @@
 # diq-standards
 
 Source of truth for engineering standards, lint rules, commit conventions, GitHub rulesets,
-and the shared `disputeiq-engineering` AI agent skill across `disputeiq-platform`.
+and the shared `disputeiq-engineering` AI agent skill across `disputeiq-io`.
 
 ## Key paths
 - `.agents/skills/disputeiq-engineering/SKILL.md`: Organization-wide engineering skill synced to all repos.

@@ -4,52 +4,79 @@
 .PARAMETER HostProvider
     Target Git host: 'github' or 'gitlab' (default: github).
 .PARAMETER Org
-    Target GitHub organization or GitLab group path (default: disputeiq-platform).
+    Target GitHub organization or GitLab group path (default: disputeiq-io).
 .PARAMETER Visibility
-    Repository visibility when creating missing repositories: 'public' or 'private' (default: private).
+    Repository visibility when creating missing repositories: 'public' or 'private' (default: public).
 .PARAMETER CreateMissing
-    Create missing repositories on the remote org/group using gh/glab CLI or GITHUB_TOKEN / GITLAB_TOKEN.
+    Create missing repositories on the remote org/group using gh/glab CLI or GITHUB_TOKEN / GH_TOKEN.
 .PARAMETER DryRun
     Preview remote URLs and push commands without modifying remotes or pushing.
 #>
 param(
     [ValidateSet("github", "gitlab")]
     [string]$HostProvider = "github",
-    [string]$Org = "disputeiq-platform",
+    [string]$Org = "disputeiq-io",
     [ValidateSet("public", "private")]
-    [string]$Visibility = "private",
+    [string]$Visibility = "public",
     [string]$Root = "D:\Projects\disputeiq",
     [switch]$CreateMissing,
     [switch]$DryRun
 )
 $ErrorActionPreference = "Stop"
+$env:GIT_TERMINAL_PROMPT = "0"
 
 $hostDomain = if ($HostProvider -eq "github") { "github.com" } else { "gitlab.com" }
-$repos = Get-ChildItem -Directory $Root | Sort-Object Name
+$repos = Get-ChildItem -Directory $Root |
+    Sort-Object @{ Expression = { if ($_.Name -eq "diq-org-github") { "000" } else { $_.Name } } }
+
+function Resolve-GhExecutable {
+    $cmd = Get-Command gh -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $defaultPath = "C:\Program Files\GitHub CLI\gh.exe"
+    if (Test-Path $defaultPath) { return $defaultPath }
+    return $null
+}
+
+function Get-GitHubToken {
+    if ($env:GH_TOKEN) { return $env:GH_TOKEN }
+    if ($env:GITHUB_TOKEN) { return $env:GITHUB_TOKEN }
+    return $null
+}
+
+$ghExe = Resolve-GhExecutable
+$ghToken = Get-GitHubToken
 
 function Ensure-RemoteRepository {
-    param([string]$RepoName)
+    param([string]$RemoteRepoName)
 
     if (-not $CreateMissing) {
         return
     }
     if ($HostProvider -eq "github") {
-        if (Get-Command gh -ErrorAction SilentlyContinue) {
-            gh repo view "$Org/$RepoName" 2>$null | Out-Null
-            if ($LASTEXITCODE -ne 0) {
+        if ($ghExe) {
+            $prevPref = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            & $ghExe repo view "$Org/$RemoteRepoName" *> $null
+            $viewExit = $LASTEXITCODE
+            $ErrorActionPreference = $prevPref
+            if ($viewExit -ne 0) {
                 $flag = if ($Visibility -eq "public") { "--public" } else { "--private" }
-                gh repo create "$Org/$RepoName" $flag --confirm | Out-Null
+                $ErrorActionPreference = "Continue"
+                & $ghExe repo create "$Org/$RemoteRepoName" $flag
+                $createExit = $LASTEXITCODE
+                $ErrorActionPreference = $prevPref
+                if ($createExit -ne 0) {
+                    throw "Failed to create GitHub repository $Org/$RemoteRepoName via gh CLI."
+                }
             }
             return
         }
-        $token = $env:GITHUB_TOKEN
-        if (-not $token) { $token = $env:GH_TOKEN }
-        if ($token) {
+        if ($ghToken) {
             $headers = @{
-                Authorization = "Bearer $token"
+                Authorization = "Bearer $ghToken"
                 Accept        = "application/vnd.github+json"
             }
-            $body = @{ name = $RepoName; private = ($Visibility -eq "private") } | ConvertTo-Json
+            $body = @{ name = $RemoteRepoName; private = ($Visibility -eq "private") } | ConvertTo-Json
             try {
                 Invoke-RestMethod -Method Post -Uri "https://api.github.com/orgs/$Org/repos" -Headers $headers -ContentType "application/json" -Body $body | Out-Null
             } catch {
@@ -57,12 +84,12 @@ function Ensure-RemoteRepository {
             }
             return
         }
-        throw "CreateMissing requested for GitHub, but neither 'gh' CLI nor GITHUB_TOKEN is available."
+        throw "CreateMissing requested for GitHub, but neither 'gh' CLI nor GH_TOKEN/GITHUB_TOKEN is available."
     }
 
     if (Get-Command glab -ErrorAction SilentlyContinue) {
         $flag = if ($Visibility -eq "public") { "--public" } else { "--private" }
-        glab repo create "$Org/$RepoName" $flag 2>$null | Out-Null
+        glab repo create "$Org/$RemoteRepoName" $flag 2>$null | Out-Null
         return
     }
     throw "CreateMissing requested for GitLab, but 'glab' CLI is not installed."
@@ -70,17 +97,18 @@ function Ensure-RemoteRepository {
 
 $pushed = 0
 foreach ($repo in $repos) {
-    $repoName = $repo.Name
-    $remoteUrl = "https://$hostDomain/$Org/$repoName.git"
+    $localName = $repo.Name
+    $remoteRepoName = if ($HostProvider -eq "github" -and $localName -eq "diq-org-github") { ".github" } else { $localName }
+    $remoteUrl = "https://$hostDomain/$Org/$remoteRepoName.git"
     $branch = git -C $repo.FullName rev-parse --abbrev-ref HEAD
 
     if ($DryRun) {
-        Write-Host "[DRY-RUN] $repoName ($branch) -> $remoteUrl"
+        Write-Host "[DRY-RUN] $localName ($branch) -> $remoteUrl"
         $pushed++
         continue
     }
 
-    Ensure-RemoteRepository -RepoName $repoName
+    Ensure-RemoteRepository -RemoteRepoName $remoteRepoName
 
     $existingOrigin = git -C $repo.FullName remote 2>$null | Where-Object { $_ -eq "origin" }
     if ($existingOrigin) {
@@ -89,8 +117,21 @@ foreach ($repo in $repos) {
         git -C $repo.FullName remote add origin $remoteUrl | Out-Null
     }
 
-    Write-Host "Pushing $repoName ($branch) -> $remoteUrl ..."
-    git -C $repo.FullName push -u origin $branch
+    Write-Host "Pushing $localName ($branch) -> $remoteUrl ..."
+    $prevPref = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    if ($HostProvider -eq "github" -and $ghToken) {
+        $rawAuth = [System.Text.Encoding]::UTF8.GetBytes("x-access-token:$ghToken")
+        $b64Auth = [Convert]::ToBase64String($rawAuth)
+        git -C $repo.FullName -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $b64Auth" push -u origin $branch
+    } else {
+        git -C $repo.FullName push -u origin $branch
+    }
+    $pushExit = $LASTEXITCODE
+    $ErrorActionPreference = $prevPref
+    if ($pushExit -ne 0) {
+        throw "Failed to push $localName ($branch) to $remoteUrl"
+    }
     $pushed++
 }
 

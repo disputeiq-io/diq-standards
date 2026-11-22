@@ -3,7 +3,7 @@
     Bootstraps and synchronizes all 20 repositories of the DisputeIQ polyrepo workspace (Gradle + Node).
 #>
 param(
-    [string]$Org = "disputeiq-platform",
+    [string]$Org = "disputeiq-io",
     [string]$Root = "D:\Projects\disputeiq",
     [switch]$LocalOnly,
     [switch]$SkipCommit

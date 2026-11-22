@@ -8,7 +8,7 @@
   ],
   "packageRules": [
     {
-      "groupName": "disputeiq-platform-libs",
+      "groupName": "disputeiq-io-libs",
       "matchPackagePrefixes": ["io.disputeiq", "@disputeiq/"],
       "automerge": false
     },

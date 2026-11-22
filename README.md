@@ -1,6 +1,6 @@
 # diq-standards
 
-Central engineering standards and developer-experience tooling for the **DisputeIQ** platform (`disputeiq-platform`).
+Central engineering standards and developer-experience tooling for the **DisputeIQ** platform (`disputeiq-io`).
 
 ## Contents
 
